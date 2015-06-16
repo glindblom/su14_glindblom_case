@@ -10,9 +10,8 @@ using System.Threading.Tasks;
 
 namespace AzureStorageHandler
 {
-    // Class to allow for easy async upload and download functions with progress change notifications
-    // Requires references to Microsoft.WindowsAzure.Storage.dll (Storage client 2.0) and Microsoft.WindowsAzure.StorageClient.dll (Storage client 1.7).
-    // See comments on UploadBlobAsync and DownloadBlobAsync functions for information on removing the 1.7 client library dependency
+    // Class to represent a single transfer to the cloud.
+    // Completely async based on an event queue where callbacks are used for cancelled, completed or errored requests.
     public class BlobTransfer
     {
         // Public async events
@@ -26,7 +25,7 @@ namespace AzureStorageHandler
         public String LocalFile { get; set; }
 
         // Private variables
-        private ICancellableAsyncResult asyncresult;
+        private ICancellableAsyncResult asyncResult;
         private bool Working = false;
         private object WorkingLock = new object();
         private AsyncOperation asyncOp;
@@ -37,8 +36,8 @@ namespace AzureStorageHandler
         private DateTime updateTime = System.DateTime.Now;
 
         // Private BlobTransfer properties
-        private string m_FileName;
-        public ICloudBlob m_Blob;
+        private string _fileName;
+        public ICloudBlob _blob;
 
         public BlobTransfer(ICloudBlob blob, string file)
         {
@@ -54,7 +53,6 @@ namespace AzureStorageHandler
         public void UploadBlobAsync()
         {
             // The class currently stores state in class level variables so calling UploadBlobAsync or DownloadBlobAsync a second time will cause problems.
-            // A better long term solution would be to better encapsulate the state, but the current solution works for the needs of my primary client.
             // Throw an exception if UploadBlobAsync or DownloadBlobAsync has already been called.
             lock (WorkingLock)
             {
@@ -71,16 +69,16 @@ namespace AzureStorageHandler
             asyncOp = AsyncOperationManager.CreateOperation(Blob);
 
             TransferType = TransferTypeEnum.Upload;
-            m_Blob = Blob;
-            m_FileName = LocalFile;
+            _blob = Blob;
+            _fileName = LocalFile;
 
-            var file = new FileInfo(m_FileName);
+            var file = new FileInfo(_fileName);
             long fileSize = file.Length;
 
             FileStream fs;
             try
             {
-                fs = new FileStream(m_FileName, FileMode.Open, FileAccess.Read, FileShare.Read);
+                fs = new FileStream(_fileName, FileMode.Open, FileAccess.Read, FileShare.Read);
             }
             catch (Exception e)
             {
@@ -89,15 +87,14 @@ namespace AzureStorageHandler
             ProgressStream pstream = new ProgressStream(fs);
             pstream.ProgressChanged += pstream_ProgressChanged;
             pstream.SetLength(fileSize);
-            m_Blob.ServiceClient.DefaultRequestOptions.ParallelOperationThreadCount = 10;
-            asyncresult = m_Blob.BeginUploadFromStream(pstream, BlobTransferCompletedCallback, new BlobTransferAsyncState(m_Blob, pstream));
+            _blob.ServiceClient.DefaultRequestOptions.ParallelOperationThreadCount = 10;
+            asyncResult = _blob.BeginUploadFromStream(pstream, BlobTransferCompletedCallback, new BlobTransferAsyncState(_blob, pstream));
             Active = true;
         }
 
         public void DownloadBlobAsync()
         {
             // The class currently stores state in class level variables so calling UploadBlobAsync or DownloadBlobAsync a second time will cause problems.
-            // A better long term solution would be to better encapsulate the state, but the current solution works for the needs of my primary client.
             // Throw an exception if UploadBlobAsync or DownloadBlobAsync has already been called.
             lock (WorkingLock)
             {
@@ -111,12 +108,12 @@ namespace AzureStorageHandler
             asyncOp = AsyncOperationManager.CreateOperation(Blob);
 
             TransferType = TransferTypeEnum.Download;
-            m_Blob = Blob;
-            m_Blob.ServiceClient.DefaultRequestOptions.RetryPolicy = new Microsoft.WindowsAzure.Storage.RetryPolicies.LinearRetry(TimeSpan.FromSeconds(5), 5);
-            m_FileName = LocalFile;
+            _blob = Blob;
+            _blob.ServiceClient.DefaultRequestOptions.RetryPolicy = new Microsoft.WindowsAzure.Storage.RetryPolicies.LinearRetry(TimeSpan.FromSeconds(5), 5);
+            _fileName = LocalFile;
             try
             {
-                m_Blob.FetchAttributes();
+                _blob.FetchAttributes();
             } catch (Exception e)
             {
                 throw e;
@@ -125,7 +122,7 @@ namespace AzureStorageHandler
             FileStream fs;
             try
             {
-                fs = new FileStream(m_FileName, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read);
+                fs = new FileStream(_fileName, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read);
             }
             catch (Exception e)
             {
@@ -133,9 +130,9 @@ namespace AzureStorageHandler
             }
             ProgressStream pstream = new ProgressStream(fs);
             pstream.ProgressChanged += pstream_ProgressChanged;
-            pstream.SetLength(m_Blob.Properties.Length);
-            m_Blob.ServiceClient.DefaultRequestOptions.ParallelOperationThreadCount = 10;
-            asyncresult = m_Blob.BeginDownloadToStream(pstream, BlobTransferCompletedCallback, new BlobTransferAsyncState(m_Blob, pstream));
+            pstream.SetLength(_blob.Properties.Length);
+            _blob.ServiceClient.DefaultRequestOptions.ParallelOperationThreadCount = 10;
+            asyncResult = _blob.BeginDownloadToStream(pstream, BlobTransferCompletedCallback, new BlobTransferAsyncState(_blob, pstream));
             Active = true;
         }
 
@@ -187,8 +184,8 @@ namespace AzureStorageHandler
         // Cancel the async download
         public void CancelAsync()
         {
-            ((BlobTransferAsyncState)asyncresult.AsyncState).Cancelled = true;
-            asyncresult.Cancel();
+            ((BlobTransferAsyncState)asyncResult.AsyncState).Cancelled = true;
+            asyncResult.Cancel();
         }
 
         // Helper function to only raise the event if the client has subscribed to it.
