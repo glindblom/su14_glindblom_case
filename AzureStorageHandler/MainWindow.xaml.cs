@@ -227,7 +227,15 @@ namespace AzureStorageHandler
 
         private void FileList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
         {
+            if ((sender as ListView).SelectedIndex == -1) return; // Let's not try to parse a header as an actual item
             dynamic item = (sender as ListView).SelectedItem;
+
+            if ((item.Tag as FileTransfer).FileName.ToLower().Contains(".mpg"))
+            {
+                StreamingWindow stream = new StreamingWindow((item.Tag as FileTransfer).Blob.Uri.ToString());
+                stream.Show();
+                return;
+            }
 
             CommonOpenFileDialog dlg = new CommonOpenFileDialog();
             dlg.DefaultDirectory = Environment.GetEnvironmentVariable("userprofile");
